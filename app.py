@@ -9,11 +9,16 @@ import os
 # -------------------------
 # Load API Key
 # -------------------------
-
 load_dotenv()
 
+api_key = (
+    st.secrets["GEMINI_API_KEY"]
+    if "GEMINI_API_KEY" in st.secrets
+    else os.getenv("GEMINI_API_KEY")
+)
+
 client = genai.Client(
-    api_key=os.getenv("GEMINI_API_KEY")
+    api_key=api_key
 )
 
 # -------------------------
