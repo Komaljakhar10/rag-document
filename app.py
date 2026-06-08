@@ -125,15 +125,10 @@ if uploaded_file and not st.session_state.pdf_processed:
     st.success("PDF Loaded")
 
     chunks = chunk_text(text)
-
-    st.write(
-        f"Total Chunks: {len(chunks)}"
-    )
-
     embeddings = []
 
     with st.spinner(
-        "Creating embeddings..."
+        "processing document..."
     ):
 
         for chunk in chunks:
@@ -151,28 +146,16 @@ if uploaded_file and not st.session_state.pdf_processed:
         embeddings,
         dtype=np.float32
     )
-
-    st.success(
-        "Embeddings Created"
-    )
-
     dimension = embeddings.shape[1]
-
     index = faiss.IndexFlatL2(
         dimension
     )
-
     index.add(
         embeddings
     )
-
     st.session_state.index = index
     st.session_state.chunks = chunks
     st.session_state.pdf_processed = True
-
-    st.success(
-        "FAISS Index Created"
-    )
     st.subheader("📊 PDF Statistics")
     col1, col2 = st.columns(2)
     with col1:
