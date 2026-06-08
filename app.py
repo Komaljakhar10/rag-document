@@ -6,7 +6,10 @@ import numpy as np
 import faiss
 import os
 
-# Load API key
+# -------------------------
+# Load API Key
+# -------------------------
+
 load_dotenv()
 
 client = genai.Client(
@@ -14,11 +17,26 @@ client = genai.Client(
 )
 
 # -------------------------
-# Chunking Function
+# Session State
 # -------------------------
-def chunk_text(text,
-               chunk_size=500,
-               overlap=50):
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+if "index" not in st.session_state:
+    st.session_state.index = None
+
+if "chunks" not in st.session_state:
+    st.session_state.chunks = None
+
+if "pdf_processed" not in st.session_state:
+    st.session_state.pdf_processed = False
+
+# -------------------------
+# Chunk Function
+# -------------------------
+
+def chunk_text(text, chunk_size=500, overlap=50):
 
     chunks = []
 
@@ -36,28 +54,58 @@ def chunk_text(text,
 
     return chunks
 
-
 # -------------------------
-# Streamlit UI
+# UI
 # -------------------------
 
 st.set_page_config(
     page_title="RAG Chatbot",
-    page_icon="📚"
+    page_icon="📚",
+    layout="wide"
 )
+st.title("🤖 AI Document Assistant")
+st.caption(
+    "Upload a PDF and ask questions using RAG + Gemini"
+)
+with st.sidebar:
+    st.header("Controls")
 
-st.title("📚 Document Q&A Bot")
-if "messages" not in st.session_state:
+    uploaded_file = st.file_uploader(
+        "Upload PDF",
+        type=["pdf"]
+    )
+
+    if st.button("Upload New PDF"):
+        ...
+
+# -------------------------
+# Reset Button
+# -------------------------
+
+if st.button("🔄 Upload New PDF"):
+
+    st.session_state.index = None
+    st.session_state.chunks = None
+    st.session_state.pdf_processed = False
     st.session_state.messages = []
+
+    st.rerun()
+
+# -------------------------
+# PDF Upload
+# -------------------------
 
 uploaded_file = st.file_uploader(
     "Upload PDF",
     type=["pdf"]
 )
 
-if uploaded_file:
+# -------------------------
+# Process PDF Only Once
+# -------------------------
 
-    # Read PDF
+if uploaded_file and not st.session_state.pdf_processed:
+
     reader = PdfReader(uploaded_file)
 
     text = ""
@@ -71,14 +119,12 @@ if uploaded_file:
 
     st.success("PDF Loaded")
 
-    # Create Chunks
     chunks = chunk_text(text)
 
     st.write(
         f"Total Chunks: {len(chunks)}"
     )
 
-    # Generate Embeddings
     embeddings = []
 
     with st.spinner(
@@ -86,6 +132,7 @@ if uploaded_file:
     ):
 
         for chunk in chunks:
+
             response = client.models.embed_content(
                 model="gemini-embedding-001",
                 contents=chunk
@@ -104,12 +151,6 @@ if uploaded_file:
         "Embeddings Created"
     )
 
-    # Create FAISS Index
-    st.write("Embeddings Shape:")
-    st.write(embeddings.shape)
-
-    st.write("Total Embeddings:")
-    st.write(len(embeddings))
     dimension = embeddings.shape[1]
 
     index = faiss.IndexFlatL2(
@@ -120,11 +161,39 @@ if uploaded_file:
         embeddings
     )
 
+    st.session_state.index = index
+    st.session_state.chunks = chunks
+    st.session_state.pdf_processed = True
+
     st.success(
         "FAISS Index Created"
     )
+    st.subheader("📊 PDF Statistics")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric(
+        "Pages",
+        len(reader.pages)
+    )
+    with col2:
+        st.metric(
+        "Chunks",
+        len(chunks)
+    )
+    if st.session_state.pdf_processed:
+        st.success(
+        "✅ PDF Processed Successfully"
+    )
 
-    # User Question
+# -------------------------
+# Question Answering
+# -------------------------
+
+if st.session_state.pdf_processed:
+
+    st.success(
+        "PDF Ready For Questions"
+    )
 
     question = st.text_input(
         "Ask a Question"
@@ -132,16 +201,14 @@ if uploaded_file:
 
     if question:
 
-        # Create question embedding
+        # Create query embedding
         query_embedding = (
             client.models.embed_content(
                 model="gemini-embedding-001",
                 contents=question
             )
         )
-        
-        st.write("Chunks:", len(chunks))
-        st.write("Embeddings List:", len(embeddings))
+
         query_vector = np.array(
             [
                 query_embedding
@@ -151,23 +218,31 @@ if uploaded_file:
             dtype=np.float32
         )
 
-    # Search FAISS
-        D, I = index.search(
-        query_vector,
-        k=3
-    )
+        # Search FAISS
+        D, I = st.session_state.index.search(
+            query_vector,
+            k=3
+        )
+
+        # Build context
         context = ""
+
         for idx in I[0]:
-            context += chunks[idx]
+
+            context += (
+                st.session_state.chunks[idx]
+            )
+
             context += "\n\n"
-# Create prompt
+
+        # Prompt
         prompt = f"""
 You are a helpful assistant.
 
 Answer ONLY using the context below.
 
-If the answer is not found in the context,
-say:
+If the answer is not found in the context, say:
+
 'I could not find this information in the document.'
 
 Context:
@@ -177,41 +252,78 @@ Question:
 {question}
 """
 
-    # Send prompt to Gemini
-        response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt
+        # Generate Answer
+        with st.spinner(
+            "Generating answer..."
+        ):
+
+            try:
+
+                response = (
+                    client.models.generate_content(
+                        model="gemini-2.5-flash",
+                        contents=prompt
+                    )
+                )
+
+                st.markdown("### 🤖 Answer")
+                st.info(response.text)
+
+                # Save chat history
+                st.session_state.messages.append(
+                    {
+                        "question": question,
+                        "answer": response.text
+                    }
+                )
+
+                # Sources
+                with st.expander(
+                    "View Sources"
+                ):
+
+                    for idx in I[0]:
+
+                        st.write(
+                            st.session_state.chunks[idx]
+                        )
+
+                        st.markdown("---")
+
+            except Exception as e:
+
+                st.error(
+                    f"Gemini API Error: {e}"
+                )
+
+    # Clear Chat Button
+    if st.button(
+        "Clear Chat"
+    ):
+
+        st.session_state.messages = []
+
+        st.rerun()
+
+# -------------------------
+# Chat History
+# -------------------------
+
+if st.session_state.messages:
+
+    st.subheader(
+        "Chat History"
     )
 
-    # Show answer
-        st.subheader("Answer")
+    for chat in reversed(
+        st.session_state.messages
+    ):
 
-        st.write(response.text)
-        st.session_state.messages.append(
-    {
-        "question": question,
-        "answer": response.text
-    }
+        st.chat_message("user").write(
+    chat["question"]
+) 
+        st.chat_message("assistant").write(
+    chat["answer"]
 )
 
-    # Show source chunks
-        with st.expander("View Sources"):
-            for idx in I[0]:
-                st.write(f"Chunk {idx}")
-                st.write(chunks[idx])
-                st.markdown("---")
-        st.subheader("Chat History")
-
-for chat in reversed(
-    st.session_state.messages
-):
-
-    st.markdown(
-        f"**Question:** {chat['question']}"
-    )
-
-    st.markdown(
-        f"**Answer:** {chat['answer']}"
-    )
-
-    st.markdown("---")
+        st.markdown("---")
